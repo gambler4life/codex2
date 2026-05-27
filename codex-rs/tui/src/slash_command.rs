@@ -13,6 +13,8 @@ pub enum SlashCommand {
     // DO NOT ALPHA-SORT! Enum order is presentation order in the popup, so
     // more frequently used commands should be listed first.
     Model,
+    Providers,
+    ApiKey,
     Ide,
     Permissions,
     Keymap,
@@ -106,6 +108,8 @@ impl SlashCommand {
             SlashCommand::MemoryDrop => "DO NOT USE",
             SlashCommand::MemoryUpdate => "DO NOT USE",
             SlashCommand::Model => "choose what model and reasoning effort to use",
+            SlashCommand::Providers => "list or add model providers",
+            SlashCommand::ApiKey => "store an API key for a configured provider",
             SlashCommand::Ide => {
                 "include current selection, open files, and other context from your IDE"
             }
@@ -155,6 +159,8 @@ impl SlashCommand {
                 | SlashCommand::Keymap
                 | SlashCommand::Mcp
                 | SlashCommand::Raw
+                | SlashCommand::Providers
+                | SlashCommand::ApiKey
                 | SlashCommand::Pets
                 | SlashCommand::Side
                 | SlashCommand::Btw
@@ -185,6 +191,8 @@ impl SlashCommand {
             | SlashCommand::Init
             | SlashCommand::Compact
             | SlashCommand::Model
+            | SlashCommand::Providers
+            | SlashCommand::ApiKey
             | SlashCommand::Personality
             | SlashCommand::Permissions
             | SlashCommand::Keymap

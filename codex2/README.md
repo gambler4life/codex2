@@ -45,6 +45,28 @@ codex2 --profile xiamo
 
 Inside the TUI, `/model` will show the active profile's bundled model catalog.
 
+## Adding Providers In The TUI
+
+Codex2 includes slash commands for simple provider setup without hand-editing
+TOML:
+
+```text
+/providers
+/providers add <id> <base_url> <model> [chat|responses]
+/api-key <id> <api_key>
+```
+
+Example:
+
+```text
+/providers add deepseek https://api.deepseek.com deepseek-v4-pro chat
+/api-key deepseek sk-...
+```
+
+`/providers add` writes `<id>.config.toml` and a one-model catalog under
+`~/.codex2`. `/api-key` stores the key in that profile. Restart with
+`codex2 --profile <id>` to use it.
+
 ## Chat Completions Providers
 
 Codex2 adds `wire_api = "chat"` for OpenAI-compatible Chat Completions

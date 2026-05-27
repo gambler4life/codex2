@@ -13,6 +13,8 @@ use crate::bottom_pane::slash_commands::BuiltinCommandFlags;
 use crate::bottom_pane::slash_commands::ServiceTierCommand;
 use crate::bottom_pane::slash_commands::SlashCommandItem;
 use crate::bottom_pane::slash_commands::find_slash_command;
+use crate::provider_setup;
+use crate::provider_setup::ProviderSetupCommand;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SlashCommandDispatchSource {
@@ -35,6 +37,8 @@ const SIDE_SLASH_COMMAND_UNAVAILABLE_HINT: &str =
 const GOAL_USAGE: &str = "Usage: /goal <objective>";
 const GOAL_USAGE_HINT: &str = "Example: /goal improve benchmark coverage";
 const RAW_USAGE: &str = "Usage: /raw [on|off]";
+const PROVIDERS_USAGE: &str = "Usage: /providers [add <id> <base_url> <model> [chat|responses]]";
+const API_KEY_USAGE: &str = "Usage: /api-key <provider> <api_key>";
 
 impl ChatWidget {
     /// Dispatch a bare slash command and record its staged local-history entry.
@@ -76,7 +80,11 @@ impl ChatWidget {
         text_elements: Vec<TextElement>,
     ) {
         self.dispatch_command_with_args(cmd, args, text_elements);
-        self.bottom_pane.record_pending_slash_command_history();
+        if cmd == SlashCommand::ApiKey {
+            self.bottom_pane.drain_pending_submission_state();
+        } else {
+            self.bottom_pane.record_pending_slash_command_history();
+        }
     }
 
     fn apply_plan_slash_command(&mut self) -> bool {
@@ -127,6 +135,104 @@ impl ChatWidget {
     fn emit_raw_output_mode_changed(&self, enabled: bool) {
         self.app_event_tx
             .send(AppEvent::RawOutputModeChanged { enabled });
+    }
+
+    fn add_providers_output(&mut self) {
+        match provider_setup::list_provider_profiles(&self.config.codex_home) {
+            Ok(profiles) if profiles.is_empty() => {
+                self.add_info_message(
+                    "No Codex2 provider profiles found.".to_string(),
+                    Some(PROVIDERS_USAGE.to_string()),
+                );
+            }
+            Ok(profiles) => {
+                let mut lines = vec!["Configured provider profiles:".to_string()];
+                for profile in profiles {
+                    let model = profile.model.as_deref().unwrap_or("unknown model");
+                    let name = profile
+                        .provider_name
+                        .as_deref()
+                        .unwrap_or("unnamed provider");
+                    let wire_api = profile.wire_api.as_deref().unwrap_or("unknown wire API");
+                    let key_state = if profile.has_inline_key {
+                        "key stored"
+                    } else {
+                        "no stored key"
+                    };
+                    lines.push(format!(
+                        "- {}: {name}, model {model}, {wire_api}, {key_state}",
+                        profile.id
+                    ));
+                }
+                lines.push(PROVIDERS_USAGE.to_string());
+                self.add_info_message(lines.join("\n"), /*hint*/ None);
+            }
+            Err(err) => {
+                self.add_error_message(format!("Failed to list providers: {err}"));
+            }
+        }
+    }
+
+    fn handle_providers_args(&mut self, args: &str) {
+        match provider_setup::parse_provider_setup_args(args) {
+            Ok(ProviderSetupCommand::List) => self.add_providers_output(),
+            Ok(ProviderSetupCommand::Add {
+                id,
+                base_url,
+                model,
+                wire_api,
+            }) => match provider_setup::add_provider_profile(
+                &self.config.codex_home,
+                &id,
+                &base_url,
+                &model,
+                &wire_api,
+            ) {
+                Ok(()) => {
+                    self.add_info_message(
+                        format!("Added provider profile '{id}' with model '{model}'."),
+                        Some(format!(
+                            "Run /api-key {id} <key>, then restart with: codex2 --profile {id}"
+                        )),
+                    );
+                }
+                Err(err) => {
+                    self.add_error_message(format!("Failed to add provider '{id}': {err}"));
+                }
+            },
+            Err(message) => {
+                self.add_error_message(message);
+            }
+        }
+    }
+
+    fn handle_api_key_args(&mut self, args: &str) {
+        match provider_setup::parse_api_key_args(args) {
+            Ok((id, api_key)) => {
+                match provider_setup::store_provider_api_key(&self.config.codex_home, &id, &api_key)
+                {
+                    Ok(()) => {
+                        self.add_info_message(
+                            format!("Stored API key for provider profile '{id}'."),
+                            Some(format!("Restart with: codex2 --profile {id}")),
+                        );
+                    }
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                        self.add_error_message(format!(
+                            "Provider profile '{id}' was not found. Add it first with /providers add."
+                        ));
+                    }
+                    Err(err) => {
+                        self.add_error_message(format!(
+                            "Failed to store API key for '{id}': {err}"
+                        ));
+                    }
+                }
+            }
+            Err(message) => {
+                self.add_error_message(message);
+            }
+        }
     }
 
     pub(super) fn dispatch_command(&mut self, cmd: SlashCommand) {
@@ -202,6 +308,15 @@ impl ChatWidget {
             }
             SlashCommand::Model => {
                 self.open_model_popup();
+            }
+            SlashCommand::Providers => {
+                self.add_providers_output();
+            }
+            SlashCommand::ApiKey => {
+                self.add_info_message(
+                    API_KEY_USAGE.to_string(),
+                    Some("Example: /api-key deepseek sk-...".to_string()),
+                );
             }
             SlashCommand::Realtime => {
                 if !self.realtime_conversation_enabled() {
@@ -592,6 +707,12 @@ impl ChatWidget {
                 "verbose" => self.add_mcp_output(McpServerStatusDetail::Full),
                 _ => self.add_error_message("Usage: /mcp [verbose]".to_string()),
             },
+            SlashCommand::Providers => {
+                self.handle_providers_args(trimmed);
+            }
+            SlashCommand::ApiKey => {
+                self.handle_api_key_args(trimmed);
+            }
             SlashCommand::Keymap => match trimmed.to_ascii_lowercase().as_str() {
                 "" => self.open_keymap_picker(),
                 "debug" => {
@@ -940,6 +1061,7 @@ impl ChatWidget {
             | SlashCommand::Mcp
             | SlashCommand::Apps
             | SlashCommand::Plugins
+            | SlashCommand::Providers
             | SlashCommand::Rollout
             | SlashCommand::Copy
             | SlashCommand::Raw
@@ -956,6 +1078,7 @@ impl ChatWidget {
             | SlashCommand::Compact
             | SlashCommand::Review
             | SlashCommand::Model
+            | SlashCommand::ApiKey
             | SlashCommand::Realtime
             | SlashCommand::Settings
             | SlashCommand::Personality
