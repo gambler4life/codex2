@@ -1,0 +1,13 @@
+model_provider = "mimo"
+model = "mimo-v2.5-pro"
+model_catalog_json = "models/mimo.models.json"
+check_for_update_on_startup = false
+
+[model_providers.mimo]
+name = "Xiaomi MiMo"
+base_url = "https://api.mimo-v2.com/v1"
+env_key = "MIMO_API_KEY"
+env_key_instructions = "Set MIMO_API_KEY to a Xiaomi MiMo API Provider key."
+wire_api = "chat"
+requires_openai_auth = false
+supports_websockets = false

@@ -1,0 +1,13 @@
+model_provider = "deepseek"
+model = "deepseek-v4-pro"
+model_catalog_json = "models/deepseek.models.json"
+check_for_update_on_startup = false
+
+[model_providers.deepseek]
+name = "DeepSeek"
+base_url = "https://api.deepseek.com"
+env_key = "DEEPSEEK_API_KEY"
+env_key_instructions = "Set DEEPSEEK_API_KEY to a DeepSeek Platform API key."
+wire_api = "chat"
+requires_openai_auth = false
+supports_websockets = false

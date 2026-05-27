@@ -106,4 +106,4 @@ if (Test-Path $ProfileSource) {
 
 Write-Host "Installed codex2 command: $ShimPath"
 Write-Host "Codex2 home: $Codex2Home"
-Write-Host "Bundled codex2 profiles: qwen, qwen-cn, qwen-us"
+Write-Host "Bundled codex2 profiles: qwen, qwen-cn, qwen-us, deepseek, mimo, xiaomi, xiamo"

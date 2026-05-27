@@ -23,7 +23,7 @@ try {
   git merge --no-ff upstream/main
 
   node --check codex-cli\bin\codex2.js
-  node -e "JSON.parse(require('fs').readFileSync('codex-cli/package.json','utf8')); JSON.parse(require('fs').readFileSync('codex2/models/qwen.models.json','utf8')); console.log('codex2 smoke checks passed')"
+  node -e "const fs=require('fs'); JSON.parse(fs.readFileSync('codex-cli/package.json','utf8')); for (const file of ['codex2/models/qwen.models.json','codex2/models/deepseek.models.json','codex2/models/mimo.models.json']) JSON.parse(fs.readFileSync(file,'utf8')); console.log('codex2 smoke checks passed')"
 
   Write-Host "Created upstream sync branch: $BranchName"
   Write-Host "Review, test, then merge this branch back to main when ready."
