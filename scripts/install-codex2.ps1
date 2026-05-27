@@ -1,5 +1,6 @@
 param(
-  [switch]$BuildFromSource
+  [switch]$BuildFromSource,
+  [switch]$ForceProfileInstall
 )
 
 $ErrorActionPreference = "Stop"
@@ -75,5 +76,34 @@ Set-Content -Path $ShimPath -Value $Shim -Encoding ASCII
 $Codex2Home = Join-Path $env:USERPROFILE ".codex2"
 New-Item -ItemType Directory -Force -Path $Codex2Home | Out-Null
 
+$ConfigPath = Join-Path $Codex2Home "config.toml"
+if (-not (Test-Path $ConfigPath)) {
+  Set-Content -Path $ConfigPath -Value "check_for_update_on_startup = false" -Encoding ASCII
+}
+
+$ProfileSource = Join-Path $RepoRoot "codex2\profiles"
+$ModelsSource = Join-Path $RepoRoot "codex2\models"
+$ModelsDest = Join-Path $Codex2Home "models"
+
+if (Test-Path $ModelsSource) {
+  New-Item -ItemType Directory -Force -Path $ModelsDest | Out-Null
+  Get-ChildItem -LiteralPath $ModelsSource -File | ForEach-Object {
+    $dest = Join-Path $ModelsDest $_.Name
+    if ($ForceProfileInstall -or -not (Test-Path $dest)) {
+      Copy-Item -LiteralPath $_.FullName -Destination $dest -Force
+    }
+  }
+}
+
+if (Test-Path $ProfileSource) {
+  Get-ChildItem -LiteralPath $ProfileSource -Filter "*.config.toml" -File | ForEach-Object {
+    $dest = Join-Path $Codex2Home $_.Name
+    if ($ForceProfileInstall -or -not (Test-Path $dest)) {
+      Copy-Item -LiteralPath $_.FullName -Destination $dest -Force
+    }
+  }
+}
+
 Write-Host "Installed codex2 command: $ShimPath"
 Write-Host "Codex2 home: $Codex2Home"
+Write-Host "Bundled codex2 profiles: qwen, qwen-cn, qwen-us"

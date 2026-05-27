@@ -6,7 +6,11 @@ if not defined CODEX_HOME set "CODEX_HOME=%USERPROFILE%\.codex2"
 set "CODEX2=1"
 
 if exist "%REPO_ROOT%\codex-rs\target\release\codex.exe" (
-  "%REPO_ROOT%\codex-rs\target\release\codex.exe" %*
+  if defined CODEX2_ENABLE_UPDATE_CHECK (
+    "%REPO_ROOT%\codex-rs\target\release\codex.exe" %*
+  ) else (
+    "%REPO_ROOT%\codex-rs\target\release\codex.exe" -c check_for_update_on_startup=false %*
+  )
   exit /b %ERRORLEVEL%
 )
 
