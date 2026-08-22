@@ -1,0 +1,71 @@
+name: custom-windows-release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "custom-v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: codex-rs
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          components: rustfmt
+      - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
+        with:
+          tool: cargo-nextest@0.9.114
+      - name: Test composer selection
+        run: |
+          just test -p codex-tui select_all_binding_replaces_selected_text
+          just test -p codex-tui delete_removes_selected_text
+          just test -p codex-tui select_all_rendering_snapshot
+      - name: Build Windows release
+        shell: pwsh
+        env:
+          LIBSQLITE3_FLAGS: SQLITE_DISABLE_INTRINSIC
+        run: cargo build --locked --release --bin codex --bin codex-code-mode-host
+      - name: Package Windows release
+        id: package
+        shell: pwsh
+        run: |
+          $stage = Join-Path $env:RUNNER_TEMP "codex-custom-windows-x64"
+          New-Item -ItemType Directory -Path $stage | Out-Null
+          Copy-Item "$env:CARGO_TARGET_DIR\release\codex.exe" $stage
+          Copy-Item "$env:CARGO_TARGET_DIR\release\codex-code-mode-host.exe" $stage
+          $archive = Join-Path $env:RUNNER_TEMP "codex-custom-windows-x64.zip"
+          Compress-Archive -Path "$stage\*" -DestinationPath $archive
+          $checksum = "${archive}.sha256"
+          "$(Get-FileHash $archive -Algorithm SHA256 | Select-Object -ExpandProperty Hash)  $(Split-Path $archive -Leaf)" | Set-Content $checksum
+          "archive=$archive" >> $env:GITHUB_OUTPUT
+          "checksum=$checksum" >> $env:GITHUB_OUTPUT
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: codex-custom-windows-x64
+          path: |
+            ${{ steps.package.outputs.archive }}
+            ${{ steps.package.outputs.checksum }}
+          retention-days: 30
+      - name: Publish tagged release
+        if: startsWith(github.ref, 'refs/tags/custom-v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" `
+            "${{ steps.package.outputs.archive }}" `
+            "${{ steps.package.outputs.checksum }}" `
+            --title "Codex ${{ github.ref_name }}" `
+            --notes "Custom Windows Codex build with composer selection support."
