@@ -2437,7 +2437,7 @@ mod tests {
                 {
                     '^'
                 } else {
-                    ' '
+                    '.'
                 }
             })
             .collect::<String>();
