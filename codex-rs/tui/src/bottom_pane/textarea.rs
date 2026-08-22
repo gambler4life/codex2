@@ -1,5 +1,5 @@
-//! The textarea owns editable composer text, placeholder elements, cursor/wrap state, and a
-//! single-entry kill buffer.
+//! The textarea owns editable composer text, placeholder elements, cursor/wrap state, selection
+//! state, and a single-entry kill buffer.
 //!
 //! Whole-buffer replacement APIs intentionally rebuild only the visible draft state. They clear
 //! element ranges and derived cursor/wrapping caches, but they keep the kill buffer intact so a
@@ -32,6 +32,7 @@ use crossterm::event::KeyModifiers;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
+use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Span;
@@ -122,6 +123,7 @@ pub(crate) struct TextElementSnapshot {
 pub(crate) struct TextArea {
     text: String,
     cursor_pos: usize,
+    selection: Option<Range<usize>>,
     wrap_cache: RefCell<Option<WrapCache>>,
     preferred_col: Option<usize>,
     elements: Vec<TextElement>,
@@ -163,6 +165,7 @@ impl TextArea {
         Self {
             text: String::new(),
             cursor_pos: 0,
+            selection: None,
             wrap_cache: RefCell::new(None),
             preferred_col: None,
             elements: Vec::new(),
@@ -215,6 +218,7 @@ impl TextArea {
         // Stage 1: replace the raw text and keep the cursor in a safe byte range.
         self.text = text.to_string();
         self.cursor_pos = self.cursor_pos.clamp(0, self.text.len());
+        self.selection = None;
         // Stage 2: rebuild element ranges from scratch against the new text.
         self.elements.clear();
         if let Some(elements) = elements {
@@ -385,11 +389,63 @@ impl TextArea {
         &self.text
     }
 
+    pub(crate) fn select_all(&mut self) {
+        if self.text.is_empty() {
+            self.selection = None;
+            return;
+        }
+        self.selection = Some(0..self.text.len());
+        self.cursor_pos = self.text.len();
+        self.preferred_col = None;
+    }
+
+    pub(crate) fn selected_text(&self) -> Option<&str> {
+        let range = self.selection.as_ref()?;
+        if range.start >= range.end {
+            return None;
+        }
+        self.text.get(range.clone())
+    }
+
+    fn clear_selection(&mut self) -> bool {
+        self.selection.take().is_some()
+    }
+
+    fn take_selection(&mut self) -> Option<Range<usize>> {
+        self.selection
+            .take()
+            .filter(|range| range.start < range.end && range.end <= self.text.len())
+    }
+
+    fn replace_selection_with_text(&mut self, text: &str) -> Option<Range<usize>> {
+        let selection = self.take_selection()?;
+        let range = self.expand_range_to_element_boundaries(selection);
+        let start = range.start;
+        self.replace_range_raw(range, text);
+        Some(start..start + text.len())
+    }
+
+    fn delete_selection(&mut self) -> bool {
+        self.replace_selection_with_text("").is_some()
+    }
+
+    fn kill_selection(&mut self, kind: KillBufferKind) -> bool {
+        let Some(range) = self.take_selection() else {
+            return false;
+        };
+        self.kill_range_with_kind(range, kind);
+        true
+    }
+
     pub fn insert_str(&mut self, text: &str) {
+        if self.replace_selection_with_text(text).is_some() {
+            return;
+        }
         self.insert_str_at(self.cursor_pos, text);
     }
 
     pub fn insert_str_at(&mut self, pos: usize, text: &str) {
+        self.selection = None;
         let pos = self.clamp_pos_for_insertion(pos);
         self.text.insert_str(pos, text);
         self.wrap_cache.replace(None);
@@ -414,6 +470,7 @@ impl TextArea {
         if removed_len == 0 && inserted_len == 0 {
             return;
         }
+        self.selection = None;
         let diff = inserted_len as isize - removed_len as isize;
 
         self.text.replace_range(range, text);
@@ -443,6 +500,7 @@ impl TextArea {
     }
 
     pub fn set_cursor(&mut self, pos: usize) {
+        self.selection = None;
         self.cursor_pos = pos.clamp(0, self.text.len());
         self.cursor_pos = self.clamp_pos_to_nearest_boundary(self.cursor_pos);
         self.preferred_col = None;
@@ -536,6 +594,12 @@ impl TextArea {
         if !matches!(event.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
             return;
         }
+        if matches!(event.code, KeyCode::Char(c) if c.eq_ignore_ascii_case(&'a'))
+            && event.modifiers == KeyModifiers::ALT | KeyModifiers::SHIFT
+        {
+            self.select_all();
+            return;
+        }
         if self.vim_enabled {
             self.handle_vim_input(event);
         } else {
@@ -545,12 +609,19 @@ impl TextArea {
     }
 
     pub fn input_with_keymap(&mut self, event: KeyEvent, keymap: &EditorKeymap) {
+        if event.code == KeyCode::Esc && self.clear_selection() {
+            return;
+        }
+
         if keymap.insert_newline.is_pressed(event) {
             self.insert_str("\n");
             return;
         }
 
         if keymap.delete_backward_word.is_pressed(event) {
+            if self.kill_selection(KillBufferKind::Characterwise) {
+                return;
+            }
             self.delete_backward_word();
             return;
         }
@@ -569,26 +640,44 @@ impl TextArea {
         }
 
         if keymap.delete_backward.is_pressed(event) {
+            if self.delete_selection() {
+                return;
+            }
             self.delete_backward(/*n*/ 1);
             return;
         }
         if keymap.delete_forward_word.is_pressed(event) {
+            if self.kill_selection(KillBufferKind::Characterwise) {
+                return;
+            }
             self.delete_forward_word();
             return;
         }
         if keymap.delete_forward.is_pressed(event) {
+            if self.delete_selection() {
+                return;
+            }
             self.delete_forward(/*n*/ 1);
             return;
         }
         if keymap.kill_line_start.is_pressed(event) {
+            if self.kill_selection(KillBufferKind::Characterwise) {
+                return;
+            }
             self.kill_to_beginning_of_line();
             return;
         }
         if keymap.kill_whole_line.is_pressed(event) {
+            if self.kill_selection(KillBufferKind::Characterwise) {
+                return;
+            }
             self.kill_current_line();
             return;
         }
         if keymap.kill_line_end.is_pressed(event) {
+            if self.kill_selection(KillBufferKind::Characterwise) {
+                return;
+            }
             self.kill_to_end_of_line();
             return;
         }
@@ -671,6 +760,9 @@ impl TextArea {
 
     fn handle_vim_insert(&mut self, event: KeyEvent) {
         if matches!(event.code, KeyCode::Esc) {
+            if self.clear_selection() {
+                return;
+            }
             let bol = self.beginning_of_current_line();
             if self.cursor_pos > bol {
                 self.cursor_pos = self.prev_atomic_boundary(self.cursor_pos).max(bol);
@@ -1057,6 +1149,9 @@ impl TextArea {
 
     // ####### Input Functions #######
     pub fn delete_backward(&mut self, n: usize) {
+        if self.delete_selection() {
+            return;
+        }
         if n == 0 || self.cursor_pos == 0 {
             return;
         }
@@ -1086,6 +1181,9 @@ impl TextArea {
     }
 
     pub fn delete_forward(&mut self, n: usize) {
+        if self.delete_selection() {
+            return;
+        }
         if n == 0 || self.cursor_pos >= self.text.len() {
             return;
         }
@@ -1100,6 +1198,9 @@ impl TextArea {
     }
 
     pub fn delete_forward_kill(&mut self, n: usize) {
+        if self.kill_selection(KillBufferKind::Characterwise) {
+            return;
+        }
         if n == 0 || self.cursor_pos >= self.text.len() {
             return;
         }
@@ -1114,6 +1215,9 @@ impl TextArea {
     }
 
     pub fn delete_backward_word(&mut self) {
+        if self.kill_selection(KillBufferKind::Characterwise) {
+            return;
+        }
         let start = self.beginning_of_previous_word();
         self.kill_range(start..self.cursor_pos);
     }
@@ -1124,6 +1228,9 @@ impl TextArea {
     /// by `end_of_next_word()`. Any whitespace (including newlines) between the cursor and that
     /// word is included in the deletion.
     pub fn delete_forward_word(&mut self) {
+        if self.kill_selection(KillBufferKind::Characterwise) {
+            return;
+        }
         let end = self.end_of_next_word();
         if end > self.cursor_pos {
             self.kill_range(self.cursor_pos..end);
@@ -1137,6 +1244,9 @@ impl TextArea {
     /// yank target and remains available even if a caller later clears or rewrites the visible
     /// buffer via `set_text_*`.
     pub fn kill_to_end_of_line(&mut self) {
+        if self.kill_selection(KillBufferKind::Characterwise) {
+            return;
+        }
         let eol = self.end_of_current_line();
         let range = if self.cursor_pos == eol {
             if eol < self.text.len() {
@@ -1161,6 +1271,9 @@ impl TextArea {
     }
 
     pub fn kill_to_beginning_of_line(&mut self) {
+        if self.kill_selection(KillBufferKind::Characterwise) {
+            return;
+        }
         let bol = self.beginning_of_current_line();
         let range = if self.cursor_pos == bol {
             if bol > 0 { Some(bol - 1..bol) } else { None }
@@ -1182,6 +1295,7 @@ impl TextArea {
         if self.kill_buffer.is_empty() {
             return;
         }
+        self.delete_selection();
         let text = self.kill_buffer.clone();
         self.insert_str(&text);
     }
@@ -1288,17 +1402,20 @@ impl TextArea {
 
     /// Move the cursor left by a single grapheme cluster.
     pub fn move_cursor_left(&mut self) {
+        self.selection = None;
         self.cursor_pos = self.prev_atomic_boundary(self.cursor_pos);
         self.preferred_col = None;
     }
 
     /// Move the cursor right by a single grapheme cluster.
     pub fn move_cursor_right(&mut self) {
+        self.selection = None;
         self.cursor_pos = self.next_atomic_boundary(self.cursor_pos);
         self.preferred_col = None;
     }
 
     pub fn move_cursor_up(&mut self) {
+        self.selection = None;
         // If we have a wrapping cache, prefer navigating across wrapped (visual) lines.
         if let Some((target_col, maybe_line)) = {
             let cache_ref = self.wrap_cache.borrow();
@@ -1370,6 +1487,7 @@ impl TextArea {
     }
 
     pub fn move_cursor_down(&mut self) {
+        self.selection = None;
         // If we have a wrapping cache, prefer navigating across wrapped (visual) lines.
         if let Some((target_col, move_to_last)) = {
             let cache_ref = self.wrap_cache.borrow();
@@ -1557,6 +1675,7 @@ impl TextArea {
         let inserted_len = new.len();
         let diff = inserted_len as isize - removed_len as isize;
 
+        self.selection = None;
         self.text.replace_range(range, new);
         self.wrap_cache.replace(None);
         self.preferred_col = None;
@@ -1603,10 +1722,15 @@ impl TextArea {
     }
 
     pub fn insert_element(&mut self, text: &str) -> u64 {
-        let start = self.clamp_pos_for_insertion(self.cursor_pos);
-        self.insert_str_at(start, text);
-        let end = start + text.len();
-        let id = self.add_element(start..end);
+        let inserted_range = if let Some(range) = self.replace_selection_with_text(text) {
+            range
+        } else {
+            let start = self.clamp_pos_for_insertion(self.cursor_pos);
+            self.insert_str_at(start, text);
+            start..start + text.len()
+        };
+        let end = inserted_range.end;
+        let id = self.add_element(inserted_range);
         // Place cursor at end of inserted element
         self.set_cursor(end);
         id
@@ -2128,6 +2252,25 @@ impl TextArea {
                     style,
                 );
             }
+
+            // Draw the active composer selection last so it remains visible over attachment and
+            // transient highlight styling.
+            if let Some(selection_range) = self.selection.as_ref() {
+                let overlap_start = selection_range.start.max(line_range.start);
+                let overlap_end = selection_range.end.min(line_range.end);
+                if overlap_start < overlap_end {
+                    let selected = &self.text[overlap_start..overlap_end];
+                    let x_off = display_width(&self.text[line_range.start..overlap_start]) as u16;
+                    let style = base_style.add_modifier(Modifier::REVERSED);
+                    buf.set_stringn(
+                        area.x + x_off,
+                        y,
+                        text_for_display(selected),
+                        usize::from(area.width.saturating_sub(x_off)),
+                        style,
+                    );
+                }
+            }
         }
     }
 
@@ -2257,6 +2400,70 @@ mod tests {
         t.replace_range(0..1, "AA");
         assert_eq!(t.text(), "AAbcd");
         assert_eq!(t.cursor(), 5);
+    }
+
+    #[test]
+    fn select_all_binding_replaces_selected_text() {
+        let mut t = ta_with("hello");
+
+        t.input(KeyEvent::new(
+            KeyCode::Char('a'),
+            KeyModifiers::ALT | KeyModifiers::SHIFT,
+        ));
+
+        assert_eq!(t.selected_text(), Some("hello"));
+
+        t.input(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "x");
+        assert_eq!(t.cursor(), 1);
+        assert_eq!(t.selected_text(), None);
+    }
+
+    #[test]
+    fn select_all_rendering_snapshot() {
+        let mut t = ta_with("hello");
+        t.select_all();
+        let area = Rect::new(0, 0, /*width*/ 8, /*height*/ 1);
+        let mut state = TextAreaState::default();
+        let mut buf = Buffer::empty(area);
+        StatefulWidgetRef::render_ref(&(&t), area, &mut buf, &mut state);
+        let reversed = (0..area.width)
+            .map(|x| {
+                if buf[(x, 0)]
+                    .style()
+                    .add_modifier
+                    .contains(Modifier::REVERSED)
+                {
+                    '^'
+                } else {
+                    ' '
+                }
+            })
+            .collect::<String>();
+
+        insta::assert_snapshot!(
+            "textarea_select_all_rendering",
+            format!(
+                "{reversed}\n{}",
+                buf.content()
+                    .iter()
+                    .map(ratatui::buffer::Cell::symbol)
+                    .collect::<String>()
+            )
+        );
+    }
+
+    #[test]
+    fn delete_removes_selected_text() {
+        let mut t = ta_with("hello");
+        t.select_all();
+
+        t.delete_backward(/*n*/ 1);
+
+        assert_eq!(t.text(), "");
+        assert_eq!(t.cursor(), 0);
+        assert_eq!(t.selected_text(), None);
     }
 
     #[test]

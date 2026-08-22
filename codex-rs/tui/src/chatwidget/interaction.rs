@@ -403,6 +403,25 @@ impl ChatWidget {
     /// When the double-press quit shortcut is enabled, pressing the same shortcut again before
     /// expiry requests a shutdown-first quit.
     fn on_ctrl_c(&mut self) {
+        if let Some(text) = self.bottom_pane.selected_composer_text() {
+            match crate::clipboard_copy::copy_to_clipboard(&text) {
+                Ok(lease) => {
+                    self.clipboard_lease = lease;
+                    self.add_to_history(history_cell::new_info_event(
+                        "Copied selected text to clipboard".into(),
+                        /*hint*/ None,
+                    ));
+                }
+                Err(error) => self.add_to_history(history_cell::new_error_event(format!(
+                    "Copy failed: {error}"
+                ))),
+            }
+            self.quit_shortcut_expires_at = None;
+            self.quit_shortcut_key = None;
+            self.bottom_pane.clear_quit_shortcut_hint();
+            self.request_redraw();
+            return;
+        }
         let key = key_hint::ctrl(KeyCode::Char('c'));
         let modal_or_popup_active = !self.bottom_pane.no_modal_or_popup_active();
         let should_pause_active_goal = self

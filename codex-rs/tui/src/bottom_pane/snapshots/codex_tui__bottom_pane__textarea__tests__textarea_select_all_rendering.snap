@@ -1,0 +1,7 @@
+---
+source: tui/src/bottom_pane/textarea.rs
+assertion_line: 2445
+expression: "format!(\"{reversed}\\n{}\",\nbuf.content().iter().map(|cell| cell.symbol()).collect::<String>())"
+---
+^^^^^   
+hello

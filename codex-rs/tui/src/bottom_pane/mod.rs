@@ -891,6 +891,14 @@ impl BottomPane {
         self.composer.current_text()
     }
 
+    pub(crate) fn selected_composer_text(&self) -> Option<String> {
+        if self.no_modal_or_popup_active() {
+            self.composer.selected_text()
+        } else {
+            None
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn composer_cursor(&self) -> usize {
         self.composer.cursor()

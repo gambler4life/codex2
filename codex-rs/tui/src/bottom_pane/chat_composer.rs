@@ -1709,6 +1709,10 @@ impl ChatComposer {
         }
     }
 
+    pub(crate) fn selected_text(&self) -> Option<String> {
+        self.draft.textarea.selected_text().map(str::to_string)
+    }
+
     /// Rehydrate a history entry into the composer with shell-like cursor placement.
     ///
     /// This path restores text, elements, images, mention bindings, and pending paste payloads,
